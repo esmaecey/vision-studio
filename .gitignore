@@ -1,0 +1,35 @@
+# --- Sanal ortamlar ---
+venv/
+.venv/
+env/
+.env
+
+# --- Python cache / derleme ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# --- Eğitim çıktıları ve model dosyaları ---
+runs/
+*.pt
+
+# --- Veri setleri (çok büyük) ---
+# Yalnızca proje kökündeki dataset ile başlayan klasörleri kapsar
+# (dataset/, dataset_eski/, dataset_kaggle/ ...). Baştaki '/' sayesinde
+# gui/dataset_split/ gibi alt dizinlerdeki kod modülleri ETKİLENMEZ.
+/dataset*/
+
+# --- Editör / IDE ---
+.vscode/
+.idea/
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+
+# --- İşletim sistemi ---
+.DS_Store
+Thumbs.db
