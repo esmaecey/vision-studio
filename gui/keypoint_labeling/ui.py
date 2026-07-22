@@ -16,6 +16,7 @@ from PyQt5.QtCore import Qt, QRectF
 
 from .utils import save_pose_label, load_pose_label, draw_pose_on_image, save_image_unicode
 from config.project_state import project_state
+from utils.dataset_paths import default_output_dir
 
 
 class KeypointItem(QGraphicsEllipseItem):
@@ -333,8 +334,8 @@ class KeypointLabelingWidget(QWidget):
             return
         self.image_folder = folder
 
-        parent_dir = os.path.dirname(folder)
-        self.output_folder = os.path.join(parent_dir, "keypoint_çıktı")
+        # Çıktı, seçilen klasörün İÇİNDE oluşturulur (üst dizinde değil)
+        self.output_folder = default_output_dir(folder, "keypoint_çıktı")
         os.makedirs(os.path.join(self.output_folder, "images"), exist_ok=True)
         os.makedirs(os.path.join(self.output_folder, "labels"), exist_ok=True)
         os.makedirs(os.path.join(self.output_folder, "vis"), exist_ok=True)
@@ -482,20 +483,20 @@ PRESETS = {
             (0, 1), (0, 2), (1, 3), (2, 4), (0, 5), (0, 6)
         ]
     },
-    "El (21 nokta)": {
+    "El (MediaPipe 21)": {
         "names": [
-            "bilek",
-            "başparmak_1", "başparmak_2", "başparmak_3", "başparmak_ucu",
-            "işaret_1", "işaret_2", "işaret_3", "işaret_ucu",
-            "orta_1", "orta_2", "orta_3", "orta_ucu",
-            "yüzük_1", "yüzük_2", "yüzük_3", "yüzük_ucu",
-            "serçe_1", "serçe_2", "serçe_3", "serçe_ucu"
+            "wrist",
+            "thumb_cmc", "thumb_mcp", "thumb_ip", "thumb_tip",
+            "index_mcp", "index_pip", "index_dip", "index_tip",
+            "middle_mcp", "middle_pip", "middle_dip", "middle_tip",
+            "ring_mcp", "ring_pip", "ring_dip", "ring_tip",
+            "pinky_mcp", "pinky_pip", "pinky_dip", "pinky_tip"
         ],
         "skeleton": [
             (0, 1), (1, 2), (2, 3), (3, 4),
             (0, 5), (5, 6), (6, 7), (7, 8),
-            (0, 9), (9, 10), (10, 11), (11, 12),
-            (0, 13), (13, 14), (14, 15), (15, 16),
+            (9, 10), (10, 11), (11, 12),
+            (13, 14), (14, 15), (15, 16),
             (0, 17), (17, 18), (18, 19), (19, 20),
             (5, 9), (9, 13), (13, 17)
         ]

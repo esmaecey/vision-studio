@@ -30,10 +30,15 @@ class ProjectState:
         self.class_names = []
         self.dataset_root = None
         self.default_model_path = None
+        # Eğitim çıktılarının kaydedileceği sabit klasör (kullanıcı Settings'ten
+        # seçebilir). None ise data.yaml'ın bulunduğu klasör kullanılır.
+        self.output_dir = None
 
         # Keypoint ayarları (data.yaml'da tanımlıysa oradan, yoksa varsayılan)
         self.keypoint_names = list(DEFAULT_KEYPOINT_NAMES)
         self.skeleton = list(DEFAULT_SKELETON)
+        # Yatay çevirmede sol/sağ keypoint takası için indeks eşlemesi
+        self.flip_idx = []
 
         # Değişiklikleri dinleyecek callback'ler
         self._listeners = []
@@ -105,6 +110,16 @@ class ProjectState:
             else:
                 self.skeleton = []
 
+        # flip_idx: yatay çevirmede keypoint indeks takası (uzunluk keypoint sayısıyla eşleşmeli)
+        flip_idx = data.get("flip_idx")
+        if isinstance(flip_idx, list) and len(flip_idx) == len(self.keypoint_names):
+            try:
+                self.flip_idx = [int(x) for x in flip_idx]
+            except (ValueError, TypeError):
+                self.flip_idx = []
+        else:
+            self.flip_idx = []
+
         self._notify()
         return self.class_names
 
@@ -121,6 +136,24 @@ class ProjectState:
         if not self.has_project():
             return "Aktif proje yok — Settings'ten bir data.yaml seçin"
         return f"{self.project_name()} · {len(self.class_names)} sınıf"
+
+    def set_output_dir(self, path):
+        """Eğitim çıktıları için sabit klasör belirler (boş verilirse varsayılana döner)."""
+        self.output_dir = path or None
+        self._notify()
+
+    def training_base_dir(self, fallback_data_yaml=None):
+        """
+        Eğitim çıktılarının kök klasörünü döner.
+        Öncelik: Settings'te seçilen output_dir → aktif data.yaml klasörü →
+        parametreyle verilen data.yaml klasörü.
+        """
+        if self.output_dir:
+            return self.output_dir
+        yaml_path = self.data_yaml_path or fallback_data_yaml
+        if yaml_path:
+            return os.path.dirname(os.path.abspath(yaml_path))
+        return None
 
     def add_class(self, name):
         """Kullanıcının arayüzden yeni sınıf eklemesi (geçici, dosyaya yazmaz)."""

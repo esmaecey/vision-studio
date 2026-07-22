@@ -9,6 +9,10 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 
 from .worker import AugmentationWorker
+from config.project_state import project_state
+from utils.dataset_paths import (
+    VALID_IMG_EXT, dir_has_images, resolve_dataset_dirs, keypoint_count_from_dir,
+)
 
 
 class AugmentationWidget(QWidget):
@@ -95,14 +99,23 @@ class AugmentationWidget(QWidget):
 
     def select_source(self):
         folder = QFileDialog.getExistingDirectory(self, "Kaynak Klasörü Seç")
-        if folder:
-            self.src_line.setText(folder)
-            self.images_dir = os.path.join(folder, "images")
-            self.labels_dir = os.path.join(folder, "labels")
-            if not os.path.isdir(self.images_dir):
-                # images/ alt klasörü yoksa, klasörün kendisini kullan
-                self.images_dir = folder
-                self.labels_dir = folder
+        if not folder:
+            return
+        self.src_line.setText(folder)
+
+        self.images_dir, self.labels_dir = resolve_dataset_dirs(folder)
+
+        self.log_area.append(f"Görsel klasörü: {self.images_dir}")
+        self.log_area.append(f"Etiket klasörü: {self.labels_dir}")
+        if not dir_has_images(self.images_dir):
+            self.log_area.append(
+                "UYARI: Seçilen klasörde doğrudan görsel yok. Lütfen görsellerin "
+                "bulunduğu klasörü seçin (örn. .../images/train)."
+            )
+        elif not os.path.isdir(self.labels_dir):
+            self.log_area.append(
+                f"UYARI: Etiket klasörü bulunamadı: {self.labels_dir}"
+            )
 
     def select_output(self):
         folder = QFileDialog.getExistingDirectory(self, "Çıktı Klasörü Seç")
@@ -120,14 +133,52 @@ class AugmentationWidget(QWidget):
             self.log_area.append("HATA: En az bir augmentation seçin.")
             return
 
+        # Etiket klasörü doğrulaması: bulunamazsa ya da hiç eşleşme yoksa durdur
+        if not os.path.isdir(self.labels_dir):
+            self.log_area.append(
+                f"HATA: Etiket klasörü bulunamadı: {self.labels_dir}\n"
+                "Kaynak olarak görsellerin klasörünü seçin (etiketler images/ → "
+                "labels/ kuralıyla aranır)."
+            )
+            return
+        image_files = [f for f in os.listdir(self.images_dir)
+                       if f.lower().endswith(VALID_IMG_EXT)]
+        matched = sum(
+            1 for f in image_files
+            if os.path.exists(os.path.join(self.labels_dir,
+                                           os.path.splitext(f)[0] + ".txt"))
+        )
+        if matched == 0:
+            self.log_area.append(
+                f"HATA: {len(image_files)} görselin hiçbiriyle eşleşen etiket yok.\n"
+                f"Etiket klasörü: {self.labels_dir}\nİşlem durduruldu."
+            )
+            return
+
+        # Veri seti pose (keypoint) mu, detect mi? Etiketlerden otomatik algıla.
+        num_kpts = keypoint_count_from_dir(self.labels_dir)
+        flip_idx = []
+        if num_kpts > 0:
+            # flip_idx aktif projeden gelir; keypoint sayısıyla eşleşmeli
+            if len(project_state.flip_idx) == num_kpts:
+                flip_idx = list(project_state.flip_idx)
+
         self.btn_start.setEnabled(False)
         self.progress.setValue(0)
         self.log_area.clear()
         self.log_area.append("Augmentation başlatılıyor...")
+        if num_kpts > 0:
+            self.log_area.append(f"Keypoint verisi algılandı (K={num_kpts}).")
+            if config.get("flip_h") and not flip_idx:
+                self.log_area.append(
+                    "UYARI: flip_idx tanımlı değil (Settings'ten doğru data.yaml'ı "
+                    "seçin). Yatay çevirme, sol/sağ karışmasın diye atlanacak."
+                )
 
         self.worker = AugmentationWorker(
             self.images_dir, self.labels_dir, self.output_dir,
-            config, self.count_spin.value()
+            config, self.count_spin.value(),
+            num_keypoints=num_kpts, flip_idx=flip_idx
         )
         self.worker.progress.connect(self.progress.setValue)
         self.worker.log.connect(self.log_area.append)

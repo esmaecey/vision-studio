@@ -9,6 +9,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 
 from .worker import SplitWorker
+from config.project_state import project_state
 
 
 class DatasetSplitWidget(QWidget):
@@ -158,7 +159,9 @@ class DatasetSplitWidget(QWidget):
         self.worker = SplitWorker(
             self.source_dir, self.output_dir, ratios,
             shuffle=self.shuffle_check.isChecked(),
-            seed=self.seed_spin.value()
+            seed=self.seed_spin.value(),
+            class_names=list(project_state.class_names),
+            flip_idx=list(project_state.flip_idx),
         )
         self.worker.progress.connect(self.progress_bar.setValue)
         self.worker.log.connect(self.log_area.append)
@@ -172,3 +175,5 @@ class DatasetSplitWidget(QWidget):
                 f"\nÖzet → Train: {summary.get('train', 0)}, "
                 f"Val: {summary.get('val', 0)}, Test: {summary.get('test', 0)}"
             )
+            if summary.get("yaml"):
+                self.log_area.append(f"Eğitim için hazır data.yaml: {summary['yaml']}")

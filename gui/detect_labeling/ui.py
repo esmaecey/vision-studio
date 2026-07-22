@@ -14,6 +14,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtGui import QPixmap, QPen, QColor, QBrush, QKeySequence, QPainter
 from PyQt5.QtCore import Qt, QRectF
 from config.project_state import project_state
+from utils.dataset_paths import derive_labels_dir, default_output_dir
 
 from .utils import (
     load_yolo_labels, save_yolo_labels, pixel_to_yolo, yolo_to_pixel,
@@ -29,9 +30,12 @@ class BoxItem(QGraphicsRectItem):
 
     HANDLE_SIZE = 8
 
-    def __init__(self, rect, class_id):
+    def __init__(self, rect, class_id, kpt_tail=""):
         super().__init__(rect)
         self.class_id = class_id
+        # Pose etiketlerinde bu kutuya ait keypoint token'ları (düzenlemede
+        # kullanılmaz ama kayıtta korunarak geri yazılır). Yeni kutularda boş.
+        self.kpt_tail = kpt_tail
         self.setFlags(
             QGraphicsItem.ItemIsMovable |
             QGraphicsItem.ItemIsSelectable |
@@ -207,13 +211,15 @@ class AnnotationCanvas(QGraphicsView):
             x1 = rect.x() + pos.x()
             y1 = rect.y() + pos.y()
             xc, yc, w, h = pixel_to_yolo(x1, y1, rect.width(), rect.height(), img_width, img_height)
-            boxes.append((item.class_id, xc, yc, w, h))
+            boxes.append((item.class_id, xc, yc, w, h, getattr(item, "kpt_tail", "")))
         return boxes
 
     def load_boxes_yolo(self, boxes, img_width, img_height):
-        for class_id, xc, yc, w, h in boxes:
+        for box in boxes:
+            class_id, xc, yc, w, h = box[:5]
+            tail = box[5] if len(box) > 5 else ""
             x1, y1, w_px, h_px = yolo_to_pixel(xc, yc, w, h, img_width, img_height)
-            box_item = BoxItem(QRectF(x1, y1, w_px, h_px), class_id)
+            box_item = BoxItem(QRectF(x1, y1, w_px, h_px), class_id, kpt_tail=tail)
             self.scene.addItem(box_item)
             self.box_items.append(box_item)
 
@@ -356,11 +362,12 @@ class DetectLabelingWidget(QWidget):
         if not folder:
             return
         self.image_folder = folder
-        self.label_folder = folder
+        # Kaynak etiketler görsellerin yanında ya da standart YOLO yapısında
+        # (images/ -> labels/) olabilir; ortak kuralla türet.
+        self.label_folder = derive_labels_dir(folder) or folder
 
-        # Çıktı klasörünü oluştur: seçilen klasörün yanında "çıktı_data"
-        parent_dir = os.path.dirname(folder)
-        self.output_folder = os.path.join(parent_dir, "çıktı_data")
+        # Çıktı klasörünü oluştur: seçilen klasörün İÇİNDE "çıktı_data"
+        self.output_folder = default_output_dir(folder, "çıktı_data")
         os.makedirs(os.path.join(self.output_folder, "images"), exist_ok=True)
         os.makedirs(os.path.join(self.output_folder, "labels"), exist_ok=True)
         os.makedirs(os.path.join(self.output_folder, "vis"), exist_ok=True)
@@ -403,9 +410,10 @@ class DetectLabelingWidget(QWidget):
 
         self.canvas.load_boxes_yolo(boxes, img_w, img_h)
 
-        self.status_label.setText(
-            f"{row + 1}/{len(self.image_files)} — {self.image_files[row]} — {len(boxes)} kutu"
-        )
+        status = f"{row + 1}/{len(self.image_files)} — {self.image_files[row]} — {len(boxes)} kutu"
+        if any(len(b) > 5 and b[5] for b in boxes):
+            status += "  (pose etiketi: keypoint verisi korunacak)"
+        self.status_label.setText(status)
 
     def _get_label_path(self, image_filename):
         base_name = os.path.splitext(image_filename)[0]

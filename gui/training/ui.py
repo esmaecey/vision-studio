@@ -5,12 +5,12 @@ import os
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit,
     QFileDialog, QSpinBox, QDoubleSpinBox, QComboBox, QCheckBox,
-    QProgressBar, QTextEdit, QGroupBox, QGridLayout
+    QProgressBar, QTextEdit, QGroupBox, QGridLayout, QMessageBox
 )
-from PyQt5.QtGui import QPixmap
-from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QPixmap, QDesktopServices
+from PyQt5.QtCore import Qt, QUrl
 
-from .worker import TrainingWorker
+from .worker import TrainingWorker, prepare_training_yaml
 from config.project_state import project_state
 
 
@@ -20,6 +20,8 @@ class TrainingWidget(QWidget):
         self.data_yaml = None
         self.worker = None
         self.mode = "detect"  # detect veya pose
+        self._temp_data_yaml = None  # eğitim için üretilen geçici data.yaml
+        self._last_exp_name = None   # kullanıcının girdiği deney adı (hata sonrası korunur)
         self._build_ui()
         project_state.add_listener(self._on_project_changed)
         self._on_project_changed()
@@ -116,15 +118,22 @@ class TrainingWidget(QWidget):
         param_group.setLayout(grid)
         layout.addWidget(param_group)
 
-        # --- Proje/İsim ---
+        # --- Deney adı ---
         name_layout = QHBoxLayout()
-        name_layout.addWidget(QLabel("Proje Adı:"))
-        self.project_line = QLineEdit("runs/train")
-        name_layout.addWidget(self.project_line)
         name_layout.addWidget(QLabel("Deney Adı:"))
         self.name_line = QLineEdit("exp")
         name_layout.addWidget(self.name_line)
         layout.addLayout(name_layout)
+
+        # --- Çıktı klasörü (otomatik hesaplanır, salt-okunur) ---
+        out_layout = QHBoxLayout()
+        out_layout.addWidget(QLabel("Çıktı Klasörü:"))
+        self.project_line = QLineEdit()
+        self.project_line.setReadOnly(True)
+        self.project_line.setPlaceholderText("data.yaml seçilince otomatik belirlenir")
+        out_layout.addWidget(self.project_line)
+        layout.addLayout(out_layout)
+        self.name_line.textChanged.connect(self._update_output_display)
 
         # --- Başlat ---
         self.btn_start = QPushButton("Eğitimi Başlat")
@@ -134,10 +143,19 @@ class TrainingWidget(QWidget):
         self.progress = QProgressBar()
         layout.addWidget(self.progress)
 
+        # Eğitim bitince çıktı klasörünü dosya gezgininde açan buton
+        self.btn_open_dir = QPushButton("Çıktı Klasörünü Aç")
+        self.btn_open_dir.clicked.connect(self._open_result_dir)
+        self.btn_open_dir.setEnabled(False)
+        self.last_result_dir = None
+        layout.addWidget(self.btn_open_dir)
+
         # --- Log ve sonuç görseli yan yana ---
         bottom_layout = QHBoxLayout()
         self.log_area = QTextEdit()
         self.log_area.setReadOnly(True)
+        # Metrik satırlarının hizalı görünmesi için sabit genişlikli font
+        self.log_area.setFontFamily("Consolas")
         bottom_layout.addWidget(self.log_area, stretch=1)
 
         self.result_image = QLabel("Eğitim sonucu grafikleri burada gösterilecek")
@@ -161,27 +179,94 @@ class TrainingWidget(QWidget):
         self.btn_detect.setChecked(mode == "detect")
         self.btn_pose.setChecked(mode == "pose")
         self._update_model_options()
+        self._update_output_display()
 
     def select_data(self):
         path, _ = QFileDialog.getOpenFileName(self, "data.yaml Seç", "", "YAML (*.yaml)")
         if path:
             self.data_yaml = path
             self.data_line.setText(path)
+            self._update_output_display()
 
     def _on_project_changed(self):
         """Merkezi projede data.yaml seçilmişse otomatik doldur."""
         if project_state.data_yaml_path and not self.data_yaml:
             self.data_yaml = project_state.data_yaml_path
             self.data_line.setText(project_state.data_yaml_path)
+        self._update_output_display()
+
+    def _compute_project_dir(self):
+        """
+        Eğitim çıktı klasörünü mutlak yol olarak hesaplar: {base}/runs/{görev}
+        base = Settings'teki çıktı klasörü, yoksa seçilen data.yaml'ın klasörü.
+        Ultralytics'e mutlak yol verildiğinden 'runs' ikilenmesi olmaz.
+        """
+        base = project_state.training_base_dir(fallback_data_yaml=self.data_yaml)
+        if not base:
+            return None
+        return os.path.join(base, "runs", self.mode)
+
+    def _update_output_display(self):
+        proj = self._compute_project_dir()
+        if proj:
+            name = self.name_line.text().strip() or "exp"
+            self.project_line.setText(os.path.join(proj, name))
+        else:
+            self.project_line.clear()
+
+    def _open_result_dir(self):
+        if self.last_result_dir and os.path.isdir(self.last_result_dir):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(self.last_result_dir))
 
     def start_training(self):
         if not self.data_yaml:
             self.log_area.append("HATA: Önce data.yaml seçin.")
             return
 
+        project_dir = self._compute_project_dir()
+        if not project_dir:
+            self.log_area.append("HATA: Çıktı klasörü belirlenemedi (data.yaml yolu geçersiz).")
+            return
+
+        exp_name = self.name_line.text().strip() or "exp"
+        # Kullanıcının girdiği ham değeri sakla ki hata durumunda geri yükleyebilelim
+        self._last_exp_name = self.name_line.text()
+
+        # Aynı deney adı zaten varsa kullanıcıya sor: üzerine yaz / yeni klasör / iptal
+        exist_ok = False
+        target_dir = os.path.join(project_dir, exp_name)
+        if os.path.isdir(target_dir):
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Question)
+            box.setWindowTitle("Deney Klasörü Mevcut")
+            box.setText(
+                f"Bu deney adı zaten var:\n{target_dir}\n\nNe yapmak istersiniz?"
+            )
+            overwrite_btn = box.addButton("Üzerine Yaz", QMessageBox.DestructiveRole)
+            new_btn = box.addButton("Yeni Klasör Oluştur", QMessageBox.AcceptRole)
+            cancel_btn = box.addButton("İptal", QMessageBox.RejectRole)
+            box.exec_()
+            clicked = box.clickedButton()
+            if clicked == cancel_btn:
+                self.log_area.append("Eğitim iptal edildi (deney adı mevcut).")
+                return
+            exist_ok = (clicked == overwrite_btn)
+
+        # data.yaml'ı hazırla: 'path'i mutlak yap, train/val varlığını doğrula,
+        # orijinali bozmadan geçici kopya üret. Hata varsa eğitimi başlatma.
+        try:
+            prepared_yaml, warnings = prepare_training_yaml(self.data_yaml)
+        except (FileNotFoundError, ValueError) as e:
+            self.log_area.append(f"HATA: {str(e)}")
+            QMessageBox.critical(self, "Veri Seti Hatası", str(e))
+            return
+        for w in warnings:
+            self.log_area.append(w)
+        self._temp_data_yaml = prepared_yaml
+
         config = {
             "model": self.model_combo.currentText(),
-            "data": self.data_yaml,
+            "data": prepared_yaml,
             "epochs": self.epoch_spin.value(),
             "imgsz": self.imgsz_spin.value(),
             "batch": self.batch_spin.value(),
@@ -191,10 +276,13 @@ class TrainingWidget(QWidget):
             "cache": self.cache_check.isChecked(),
             "lr0": self.lr_spin.value(),
             "optimizer": self.opt_combo.currentText(),
-            "project": self.project_line.text(),
-            "name": self.name_line.text(),
+            "project": project_dir,   # mutlak yol: {base}/runs/{görev}
+            "name": exp_name,
+            "task": self.mode,
+            "exist_ok": exist_ok,     # True: üzerine yaz, False: otomatik yeni klasör
         }
 
+        self.btn_open_dir.setEnabled(False)
         self.btn_start.setEnabled(False)
         self.progress.setValue(0)
         self.log_area.clear()
@@ -210,6 +298,18 @@ class TrainingWidget(QWidget):
     def on_finished(self, result_dir):
         self.btn_start.setEnabled(True)
 
+        # Eğitim için üretilen geçici data.yaml'ı temizle
+        if self._temp_data_yaml and os.path.exists(self._temp_data_yaml):
+            try:
+                os.remove(self._temp_data_yaml)
+            except OSError:
+                pass
+        self._temp_data_yaml = None
+
+        # Deney adı alanı herhangi bir sebeple boşaldıysa kullanıcının değerini koru
+        if self._last_exp_name and not self.name_line.text().strip():
+            self.name_line.setText(self._last_exp_name)
+
         if not result_dir:
             self.log_area.append("\nEğitim tamamlanamadı (hata oluştu).")
             return
@@ -217,6 +317,10 @@ class TrainingWidget(QWidget):
         if not os.path.isdir(result_dir):
             self.log_area.append(f"\nUyarı: Sonuç klasörü bulunamadı: {result_dir}")
             return
+
+        # Çıktı klasörünü sakla ve "Klasörü Aç" butonunu etkinleştir
+        self.last_result_dir = os.path.abspath(result_dir)
+        self.btn_open_dir.setEnabled(True)
 
         # results.png'yi göster (yoksa confusion matrix'i dene)
         for fname in ["results.png", "confusion_matrix.png"]:

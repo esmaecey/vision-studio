@@ -2,6 +2,7 @@
 Test Arayüzü — eğitilmiş modeli görsel/video/webcam üzerinde çalıştırır.
 """
 import os
+import time
 import cv2
 import numpy as np
 from PyQt5.QtWidgets import (
@@ -11,7 +12,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtCore import Qt
 
-from .worker import InferenceWorker
+from .worker import InferenceWorker, draw_skeleton_lines
 from config.project_state import project_state
 
 def imread_unicode(path):
@@ -24,6 +25,7 @@ def imwrite_unicode(path, img):
     ok, enc = cv2.imencode(ext, img)
     if ok:
         enc.tofile(path)
+    return ok
 
 
 class TestingWidget(QWidget):
@@ -179,7 +181,8 @@ class TestingWidget(QWidget):
         self.btn_stop.setEnabled(True)
         self.log_area.clear()
 
-        self.worker = InferenceWorker(self.model_path, source, conf)
+        self.worker = InferenceWorker(self.model_path, source, conf,
+                                      skeleton=list(project_state.skeleton))
         self.worker.frame_ready.connect(self.on_frame)
         self.worker.log.connect(self.log_area.append)
         self.worker.finished_signal.connect(self.on_inference_finished)
@@ -197,7 +200,10 @@ class TestingWidget(QWidget):
                 return
 
             results = model(img, conf=conf, verbose=False)
-            annotated = results[0].plot()
+            annotated = results[0].plot(kpt_line=False)
+            drew = draw_skeleton_lines(annotated, results[0], list(project_state.skeleton))
+            if drew is False:
+                self.log_area.append("Bilgi: Bu model için iskelet tanımı yok; sadece noktalar çiziliyor.")
             self.current_frame = annotated
             self._show_frame(annotated)
 
@@ -235,7 +241,23 @@ class TestingWidget(QWidget):
         if self.current_frame is None:
             self.log_area.append("HATA: Kaydedilecek kare yok.")
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Snapshot Kaydet", "snapshot.jpg", "JPEG (*.jpg)")
-        if path:
-            imwrite_unicode(path, self.current_frame)
-            self.log_area.append(f"Snapshot kaydedildi: {path}")
+
+        # Kareyi tıklama anında dondur: dosya diyaloğu modal olduğundan açıkken
+        # worker canlı önizlemeyi güncellemeye devam eder; kopya almazsak
+        # kaydedilen kare, tıklama anındaki değil sonraki bir kare olur.
+        frame = self.current_frame.copy()
+
+        default_name = f"snapshot_{time.strftime('%Y%m%d_%H%M%S')}.jpg"
+        path, _ = QFileDialog.getSaveFileName(self, "Snapshot Kaydet", default_name, "JPEG (*.jpg)")
+        if not path:
+            return
+
+        # Uzantı yoksa .jpg ekle (aksi halde imencode sessizce başarısız olur)
+        if not os.path.splitext(path)[1]:
+            path += ".jpg"
+
+        if imwrite_unicode(path, frame):
+            self.log_area.append(f"Snapshot kaydedildi: {os.path.abspath(path)}")
+        else:
+            self.log_area.append(f"HATA: Snapshot kaydedilemedi: {path}")
+        # Canlı önizlemeye dokunmuyoruz; worker kesintisiz devam eder.

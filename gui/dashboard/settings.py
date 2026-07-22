@@ -86,6 +86,29 @@ class SettingsWidget(QWidget):
         m_row.addWidget(btn_m)
         paths_layout.addLayout(m_row)
 
+        # Eğitim çıktı klasörü (opsiyonel; boşsa data.yaml klasörü kullanılır)
+        o_row = QHBoxLayout()
+        o_row.addWidget(QLabel("Çıktı Klasörü:"))
+        self.output_line = QLineEdit()
+        self.output_line.setReadOnly(True)
+        self.output_line.setPlaceholderText("Varsayılan: data.yaml'ın bulunduğu klasör")
+        o_row.addWidget(self.output_line)
+        btn_o = QPushButton("Seç")
+        btn_o.clicked.connect(self.select_output_dir)
+        o_row.addWidget(btn_o)
+        btn_o_clear = QPushButton("Temizle")
+        btn_o_clear.clicked.connect(self.clear_output_dir)
+        o_row.addWidget(btn_o_clear)
+        paths_layout.addLayout(o_row)
+
+        out_desc = QLabel(
+            "Eğitim çıktıları buraya '/runs/<görev>/<deney adı>' altında kaydedilir. "
+            "Boş bırakılırsa data.yaml'ın bulunduğu klasör kullanılır."
+        )
+        out_desc.setWordWrap(True)
+        out_desc.setStyleSheet("font-size: 11px; color: gray;")
+        paths_layout.addWidget(out_desc)
+
         paths_group.setLayout(paths_layout)
         layout.addWidget(paths_group)
 
@@ -115,6 +138,16 @@ class SettingsWidget(QWidget):
         if path:
             self.model_line.setText(path)
             project_state.default_model_path = path
+
+    def select_output_dir(self):
+        path = QFileDialog.getExistingDirectory(self, "Çıktı Klasörü Seç", "")
+        if path:
+            project_state.set_output_dir(path)
+            self.output_line.setText(path)
+
+    def clear_output_dir(self):
+        project_state.set_output_dir(None)
+        self.output_line.clear()
 
     def on_theme_changed(self, index):
         if self.main_window:
