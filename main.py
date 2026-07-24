@@ -13,6 +13,7 @@ from gui.detect_labeling.ui import DetectLabelingWidget
 from gui.keypoint_labeling.ui import KeypointLabelingWidget
 from gui.augmentation.ui import AugmentationWidget
 from gui.dataset_split.ui import DatasetSplitWidget
+from gui.data_validation.ui import DataValidationWidget
 from gui.training.ui import TrainingWidget
 from gui.testing.ui import TestingWidget
 from gui.dashboard.home import HomeWidget
@@ -52,6 +53,7 @@ class MainWindow(QWidget):
             "Keypoint Labeling",
             "Data Augmentation",
             "Dataset Split",
+            "Veri Doğrulama",
             "Training",
             "Testing",
             "Settings",
@@ -78,10 +80,11 @@ class MainWindow(QWidget):
         self.stack.addWidget(KeypointLabelingWidget())          # 2
         self.stack.addWidget(AugmentationWidget())              # 3
         self.stack.addWidget(DatasetSplitWidget())              # 4
-        self.stack.addWidget(TrainingWidget())                  # 5
-        self.stack.addWidget(TestingWidget())                   # 6
-        self.stack.addWidget(SettingsWidget(main_window=self))  # 7
-        self.stack.addWidget(self._build_about())               # 8
+        self.stack.addWidget(DataValidationWidget())            # 5
+        self.stack.addWidget(TrainingWidget())                  # 6
+        self.stack.addWidget(TestingWidget())                   # 7
+        self.stack.addWidget(SettingsWidget(main_window=self))  # 8
+        self.stack.addWidget(self._build_about())               # 9
 
         content_layout.addWidget(self.stack)
         content_container.setLayout(content_layout)
