@@ -11,6 +11,7 @@ from PyQt5.QtCore import Qt
 from .worker import ScanWorker, FixWorker
 from config.project_state import project_state
 from utils.dataset_paths import resolve_dataset_dirs, dir_has_images
+from gui.common.help import show_help
 
 
 ISSUE_LABELS = {
@@ -36,7 +37,7 @@ class DataValidationWidget(QWidget):
     def _build_ui(self):
         layout = QVBoxLayout()
 
-        title = QLabel("Veri Doğrulama")
+        title = QLabel("Data Validation (Veri Doğrulama)")
         title.setStyleSheet("font-size: 22px; font-weight: 700;")
         layout.addWidget(title)
 
@@ -100,6 +101,24 @@ class DataValidationWidget(QWidget):
         layout.addWidget(self.result_area, stretch=1)
 
         self.setLayout(layout)
+
+    def show_help(self):
+        """F1 — modül bilgisi."""
+        show_help(
+            self,
+            "Data Validation (Veri Doğrulama) — Yardım",
+            "Etiket dosyalarındaki koordinat taşması, eksik/boş/bozuk etiket ve "
+            "tutarsız keypoint gibi sorunları tespit eder. 'Tara' yalnızca analiz "
+            "eder; 'Düzelt' koordinat taşmalarını (önce yedek alarak) onarır.",
+            [
+                ("Kullanım", [
+                    ("Kaynak Seç", "images/ + labels/ içeren kök ya da görsel klasörü"),
+                    ("Tara", "Sorunları analiz eder, hiçbir şeyi değiştirmez"),
+                    ("Düzelt", "Koordinat taşmalarını onarır (labels_orig yedeği alır)"),
+                    ("İptal", "Çalışan taramayı/düzeltmeyi durdurur"),
+                ]),
+            ]
+        )
 
     # ---------- Kaynak ----------
     def select_source(self):

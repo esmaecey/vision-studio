@@ -14,6 +14,7 @@ from PyQt5.QtCore import Qt
 
 from .worker import InferenceWorker, draw_skeleton_lines
 from config.project_state import project_state
+from gui.common.help import show_help
 
 def imread_unicode(path):
     arr = np.fromfile(path, dtype=np.uint8)
@@ -114,6 +115,26 @@ class TestingWidget(QWidget):
         layout.addWidget(self.log_area)
 
         self.setLayout(layout)
+
+    def show_help(self):
+        """F1 — modül bilgisi."""
+        show_help(
+            self,
+            "Testing (Test) — Yardım",
+            "Eğitilmiş bir modeli (.pt) görsel, video ya da webcam üzerinde çalıştırıp "
+            "tespit/poz sonuçlarını canlı gösterir. Confidence eşiğini ayarlayabilir, "
+            "sonucu snapshot olarak kaydedebilirsiniz.",
+            [
+                ("Kullanım", [
+                    ("Model Seç (.pt)", "best.pt gibi eğitilmiş bir model seçer"),
+                    ("Kaynak", "Görsel / Video / Webcam"),
+                    ("Dosya Seç", "Görsel veya video dosyasını seçer"),
+                    ("Confidence", "Tespit güven eşiği (düşük = daha çok tespit)"),
+                    ("Başlat / Durdur", "Inference'ı başlatır / durdurur"),
+                    ("Snapshot Al", "O anki kareyi görsel olarak kaydeder"),
+                ]),
+            ]
+        )
 
     def select_model(self):
         path, _ = QFileDialog.getOpenFileName(self, "Model Seç", "", "PyTorch Model (*.pt)")

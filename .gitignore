@@ -23,6 +23,39 @@ runs/
 # gui/dataset_split/ gibi alt dizinlerdeki kod modülleri ETKİLENMEZ.
 /dataset*/
 
+# --- Kullanıcı ayarları (kalıcı tercihler; makineye özel) ---
+user_settings.json
+
+# --- ISG tek seferlik veri hazırlama scriptleri (Vision Studio'ya ait DEĞİL) ---
+# Bu depo Vision Studio kaynak kodudur; ISG scriptleri isg-scriptleri klasörüne
+# taşındı. Baştaki '/' ile yalnızca kök dizindeki bu dosyalar hedeflenir; gui/
+# gibi alt dizinlerdeki modüller ETKİLENMEZ.
+/ayikla.py
+/birlestir.py
+/count_classes.py
+/count_test.py
+/duzeltmeleri_uygula.py
+/fark_say.py
+/incele.py
+/isimlendir_kalan.py
+/isimlendir_test.py
+/kirp.py
+/merge_dataset.py
+/merge_kaggle.py
+/merge_kaggle_test.py
+/merge_kaggle_valid.py
+/paketle.py
+/sizinti_temizle.py
+/stratified_ekle.py
+/train_local.py
+/train_local_v2.py
+/test.py
+/test2.py
+/test3.py
+/sonuc.jpg
+/test.jpg
+/test_bend.jpg
+
 # --- Editör / IDE ---
 .vscode/
 .idea/

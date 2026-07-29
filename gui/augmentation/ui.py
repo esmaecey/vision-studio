@@ -13,6 +13,7 @@ from config.project_state import project_state
 from utils.dataset_paths import (
     VALID_IMG_EXT, dir_has_images, resolve_dataset_dirs, keypoint_count_from_dir,
 )
+from gui.common.help import show_help
 
 
 class AugmentationWidget(QWidget):
@@ -188,3 +189,25 @@ class AugmentationWidget(QWidget):
     def on_finished(self, count):
         self.btn_start.setEnabled(True)
         self.log_area.append(f"\nİşlem bitti. Toplam {count} yeni görsel üretildi.")
+
+    def show_help(self):
+        """F1 — modül bilgisi."""
+        show_help(
+            self,
+            "Data Augmentation (Veri Artırma) — Yardım",
+            "Veri setinizi çeşitlendirmek için görsellere dönüşümler (çevirme, "
+            "döndürme, parlaklık, renk, bulanıklık, gürültü, CLAHE) uygular ve "
+            "etiketleri (bounding box / keypoint) buna göre günceller.",
+            [
+                ("Kullanım", [
+                    ("Kaynak Seç", "images/ ve labels/ içeren veri seti klasörünü seçer"),
+                    ("Çıktı Seç", "Üretilen görsellerin kaydedileceği klasör"),
+                    ("Yöntemler", "Uygulanacak augmentation'ları işaretleyin"),
+                    ("Adet", "Her görselden kaç yeni varyasyon üretileceği"),
+                    ("Augmentation Başlat", "İşlemi başlatır"),
+                ]),
+                ("Not", [
+                    ("Keypoint (pose)", "Yatay çevirme için data.yaml'da flip_idx gerekir"),
+                ]),
+            ]
+        )

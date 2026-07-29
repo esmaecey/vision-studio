@@ -84,6 +84,42 @@ def label_path_for(image_path, images_dir, labels_dir):
     return os.path.join(labels_dir, rel_txt)
 
 
+def label_path_by_swap(image_path):
+    """
+    Görsel yolundaki son 'images' bileşenini 'labels' ile değiştirerek etiket
+    yolunu üretir. Hem '.../images/train/x.jpg -> .../labels/train/x.txt' hem de
+    '.../train/images/x.jpg -> .../train/labels/x.txt' düzenlerini destekler.
+    Yolda 'images' bileşeni yoksa None döner.
+    """
+    if not image_path:
+        return None
+    norm = os.path.normpath(image_path)
+    parts = norm.split(os.sep)
+    for i in range(len(parts) - 1, -1, -1):
+        if parts[i].lower() == "images":
+            parts[i] = "labels"
+            swapped = os.sep.join(parts)
+            return os.path.splitext(swapped)[0] + ".txt"
+    return None
+
+
+def best_label_path(image_path, images_dir, labels_dir):
+    """
+    Bir görsel için en olası etiket yolunu bulur:
+      1) images->labels bileşen takası (varsa ve dosya mevcutsa),
+      2) images_dir'e göreli labels_dir eşlemesi.
+    Hiçbiri mevcut değilse (2)'nin yolunu döner (var olmasa bile referans için).
+    """
+    swap = label_path_by_swap(image_path)
+    if swap and os.path.exists(swap):
+        return swap
+    rel = label_path_for(image_path, images_dir, labels_dir)
+    if os.path.exists(rel):
+        return rel
+    # İkisi de yoksa: takas yolu daha güvenilir kabul edilir, yoksa göreli
+    return swap or rel
+
+
 def collect_dataset_items(images_dir, labels_dir):
     """
     images_dir altındaki görselleri (doğrudan ya da train/val gibi alt klasörlerde)
@@ -107,7 +143,7 @@ def collect_dataset_items(images_dir, labels_dir):
     if direct:
         for f in sorted(direct):
             ip = os.path.join(images_dir, f)
-            lp = label_path_for(ip, images_dir, labels_dir)
+            lp = best_label_path(ip, images_dir, labels_dir)
             items.append((ip, lp if os.path.exists(lp) else None, f))
         return items, []
 
@@ -120,7 +156,8 @@ def collect_dataset_items(images_dir, labels_dir):
             ip = os.path.join(root, f)
             rel = os.path.relpath(ip, images_dir)
             used_subdirs.add(rel.split(os.sep)[0])
-            lp = label_path_for(ip, images_dir, labels_dir)
+            # Etiketi hem images->labels takasıyla hem göreli eşlemeyle ara
+            lp = best_label_path(ip, images_dir, labels_dir)
             out_name = rel.replace(os.sep, "_")
             items.append((ip, lp if os.path.exists(lp) else None, out_name))
     items.sort(key=lambda x: x[2])

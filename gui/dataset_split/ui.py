@@ -10,6 +10,7 @@ from PyQt5.QtCore import Qt
 
 from .worker import SplitWorker
 from config.project_state import project_state
+from gui.common.help import show_help
 
 
 class DatasetSplitWidget(QWidget):
@@ -177,3 +178,22 @@ class DatasetSplitWidget(QWidget):
             )
             if summary.get("yaml"):
                 self.log_area.append(f"Eğitim için hazır data.yaml: {summary['yaml']}")
+
+    def show_help(self):
+        """F1 — modül bilgisi."""
+        show_help(
+            self,
+            "Dataset Split (Veri Bölme) — Yardım",
+            "Veri setini train/val/test alt kümelerine böler ve eğitime hazır bir "
+            "data.yaml üretir. Zaten bölünmüş (images/train, images/val) veri "
+            "setlerini de tanır: tüm görselleri toplayıp yeniden böler.",
+            [
+                ("Kullanım", [
+                    ("Kaynak Seç", "images/ + labels/ içeren kök ya da görsel klasörü"),
+                    ("Çıktı Seç", "Bölünmüş veri setinin yazılacağı klasör"),
+                    ("Oranlar", "Train/Val/Test yüzdeleri (toplam 100 olmalı)"),
+                    ("Karıştır / Seed", "Rastgele karıştırma ve tekrarlanabilirlik"),
+                    ("Bölmeyi Başlat", "İşlemi başlatır"),
+                ]),
+            ]
+        )

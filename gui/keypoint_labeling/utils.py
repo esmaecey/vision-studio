@@ -1,10 +1,87 @@
 """
 Keypoint Labeling yardımcıları — COCO 17 keypoint şablonu, iskelet bağlantıları,
-YOLO-Pose format okuma/yazma.
+YOLO-Pose format okuma/yazma, keypoint renk paleti.
 """
 import os
 import cv2
 import numpy as np
+
+
+# ---------------------------------------------------------------------------
+# Renk paleti — her keypoint index'i kendine ait sabit bir renkte gösterilsin.
+# 21 noktalı el (MediaPipe/Ultralytics sırası) için parmak bazlı gruplama;
+# diğer şablonlar (COCO 17, özel) için ayırt edilebilir genel palet.
+# Renkler RGB döner; index'e göre STABİL'dir (kpt_shape/flip_idx ile tutarlı).
+# ---------------------------------------------------------------------------
+
+# Standart 21 noktalı el: parmak grupları (index listeleri)
+_HAND_FINGERS = [
+    ("thumb",  [1, 2, 3, 4]),
+    ("index",  [5, 6, 7, 8]),
+    ("middle", [9, 10, 11, 12]),
+    ("ring",   [13, 14, 15, 16]),
+    ("pinky",  [17, 18, 19, 20]),
+]
+# Her parmak için taban (koyu) renk — uca doğru açılır (lighten)
+_FINGER_BASE = {
+    "thumb":  (220, 40, 40),    # kırmızı
+    "index":  (240, 150, 20),   # turuncu
+    "middle": (40, 180, 70),    # yeşil
+    "ring":   (40, 130, 245),   # mavi
+    "pinky":  (180, 70, 230),   # mor
+}
+_WRIST_COLOR = (245, 245, 245)  # bilek (0) — açık gri/beyaz
+
+# Genel ayırt edilebilir palet (Sasha Trubetskoy'un 20 renk seti + ekler)
+_DISTINCT = [
+    (230, 25, 75), (60, 180, 75), (255, 200, 20), (0, 130, 200), (245, 130, 48),
+    (145, 30, 180), (70, 240, 240), (240, 50, 230), (170, 220, 40), (250, 150, 190),
+    (0, 160, 160), (200, 160, 255), (170, 110, 40), (255, 220, 130), (170, 0, 40),
+    (170, 255, 195), (150, 150, 0), (255, 160, 110), (60, 100, 220), (128, 128, 128),
+    (255, 100, 180), (30, 200, 130), (120, 60, 220), (210, 90, 40),
+]
+
+
+def _lighten(rgb, t):
+    """rgb rengini beyaza doğru t (0..1) oranında açar."""
+    return tuple(int(c + (255 - c) * t) for c in rgb)
+
+
+def _finger_of(index):
+    """21'lik el düzeninde index hangi parmakta? (bilek/geçersizse None)"""
+    for name, idxs in _HAND_FINGERS:
+        if index in idxs:
+            return name, idxs
+    return None
+
+
+def keypoint_color(index, total):
+    """
+    Bir keypoint index'i için sabit RGB renk döner.
+    total == 21 ise parmak bazlı renklendirme; aksi halde genel palet.
+    """
+    if total == 21:
+        if index == 0:
+            return _WRIST_COLOR
+        fg = _finger_of(index)
+        if fg is not None:
+            name, idxs = fg
+            pos = idxs.index(index)            # 0 (taban) .. 3 (uç)
+            return _lighten(_FINGER_BASE[name], 0.18 * pos)
+    return _DISTINCT[index % len(_DISTINCT)]
+
+
+def skeleton_edge_color(a, b, total):
+    """Bir iskelet kenarı (a-b) için RGB renk. El ise parmak grubuna göre."""
+    if total == 21:
+        fa = _finger_of(a)
+        fb = _finger_of(b)
+        name = (fa or fb)[0] if (fa or fb) else None
+        if name is not None:
+            return _FINGER_BASE[name]
+        return (0, 200, 255)  # bileğe bağlanan / gruplanamayan kenarlar
+    # Genel: kenarı uç (b) noktasının rengiyle boya
+    return keypoint_color(b, total)
 
 
 
@@ -70,18 +147,26 @@ def draw_pose_on_image(image_path, persons, skeleton):
 
     for person in persons:
         kps = person['keypoints']
+        total = len(kps)
 
+        # İskelet kenarları — parmak grubuna göre renkli (RGB -> BGR)
         for (a, b) in skeleton:
             if a < len(kps) and b < len(kps):
                 xa, ya, va = kps[a]
                 xb, yb, vb = kps[b]
                 if va > 0 and vb > 0:
-                    cv2.line(img, (int(xa), int(ya)), (int(xb), int(yb)), (255, 200, 0), 2)
+                    r, g, bl = skeleton_edge_color(a, b, total)
+                    cv2.line(img, (int(xa), int(ya)), (int(xb), int(yb)), (bl, g, r), 2)
 
-        for (x, y, v) in kps:
+        # Noktalar — her index kendi rengiyle (RGB -> BGR); v==1 içi boş
+        for i, (x, y, v) in enumerate(kps):
             if v > 0:
-                color = (0, 0, 255) if v == 2 else (0, 165, 255)
-                cv2.circle(img, (int(x), int(y)), 4, color, -1)
+                r, g, bl = keypoint_color(i, total)
+                bgr = (bl, g, r)
+                if v == 2:
+                    cv2.circle(img, (int(x), int(y)), 4, bgr, -1)
+                else:
+                    cv2.circle(img, (int(x), int(y)), 4, bgr, 1)
 
     return img
 

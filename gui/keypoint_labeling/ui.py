@@ -7,92 +7,194 @@ import shutil
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGraphicsView, QGraphicsScene,
     QGraphicsPixmapItem, QGraphicsEllipseItem, QGraphicsLineItem, QGraphicsItem,
-    QListWidget, QPushButton, QLabel, QFileDialog, QSlider, QMessageBox,
-    QInputDialog, QDialog, QTextEdit, QDialogButtonBox, QComboBox, QLineEdit
+    QGraphicsSimpleTextItem, QListWidget, QPushButton, QLabel, QFileDialog,
+    QSlider, QMessageBox, QInputDialog, QDialog, QTextEdit, QDialogButtonBox,
+    QComboBox, QLineEdit, QShortcut
 )
 
-from PyQt5.QtGui import QPixmap, QPen, QColor, QBrush, QPainter
+from PyQt5.QtGui import QPixmap, QPen, QColor, QBrush, QPainter, QKeySequence, QFont
 from PyQt5.QtCore import Qt, QRectF
 
-from .utils import save_pose_label, load_pose_label, draw_pose_on_image, save_image_unicode
+from .utils import (
+    save_pose_label, load_pose_label, draw_pose_on_image, save_image_unicode,
+    keypoint_color, skeleton_edge_color,
+)
 from config.project_state import project_state
-from utils.dataset_paths import default_output_dir
+from utils.dataset_paths import default_output_dir, derive_labels_dir
+from gui.common.help import show_help
 
 
 class KeypointItem(QGraphicsEllipseItem):
-    """Taşınabilir keypoint noktası."""
-    def __init__(self, x, y, radius, index, canvas):
+    """Seçilebilir, taşınabilir keypoint noktası (belirli bir keypoint index'ine ait)."""
+
+    def __init__(self, x, y, radius, index, canvas, visibility=2):
         super().__init__(-radius, -radius, 2 * radius, 2 * radius)
         self.setPos(x, y)
         self.kp_index = index
         self.canvas = canvas
-        self.visibility = 2
+        self.visibility = visibility
+        self._radius = radius
         self.setFlags(
             QGraphicsItem.ItemIsMovable |
             QGraphicsItem.ItemIsSelectable |
             QGraphicsItem.ItemSendsScenePositionChanges
         )
         self.setAcceptHoverEvents(True)
+        self.setZValue(1)
+
+        # Index/isim etiketi (açılır-kapanır). Zoom'dan etkilenmesin diye sabit boyda.
+        self.label_item = QGraphicsSimpleTextItem(str(index), self)
+        self.label_item.setFlag(QGraphicsItem.ItemIgnoresTransformations, True)
+        _font = QFont()
+        _font.setPointSize(8)
+        _font.setBold(True)
+        self.label_item.setFont(_font)
+        self.label_item.setBrush(QBrush(QColor(255, 255, 255)))
+        self.label_item.setPen(QPen(QColor(0, 0, 0), 0.7))  # okunurluk için ince dış çizgi
+        self.label_item.setZValue(2)
+        self._position_label()
+        self.label_item.setVisible(bool(getattr(canvas, "show_labels", False)))
+
         self.update_color()
 
+    def _base_color(self):
+        total = self.canvas.num_kpts() if self.canvas is not None else 0
+        r, g, b = keypoint_color(self.kp_index, total)
+        return QColor(r, g, b)
+
     def update_color(self):
+        color = self._base_color()
         if self.visibility == 2:
-            self.setBrush(QBrush(QColor(255, 0, 0)))       # görünür - kırmızı
+            self.setBrush(QBrush(color))                       # görünür: dolu, kendi rengi
         elif self.visibility == 1:
-            self.setBrush(QBrush(QColor(255, 165, 0)))     # örtük - turuncu
+            faded = QColor(color)
+            faded.setAlpha(110)
+            self.setBrush(QBrush(faded))                       # örtük: yarı saydam
         else:
-            self.setBrush(QBrush(QColor(120, 120, 120)))   # yok - gri
-        self.setPen(QPen(QColor(255, 255, 255), 1))
+            self.setBrush(QBrush(QColor(110, 110, 110)))       # yok: gri
+        if self.isSelected():
+            # Seçili nokta: kalın beyaz halka ile öne çıksın (rengini korur)
+            self.setPen(QPen(QColor(255, 255, 255), 3))
+        else:
+            # Kendi rengiyle uyumlu koyu ince kenar (arka planda kontrast)
+            self.setPen(QPen(QColor(20, 20, 20), 1))
+
+    def _position_label(self):
+        # Etiketi noktanın sağ-üstüne yerleştir
+        self.label_item.setPos(self._radius + 2, -self._radius - 12)
+
+    def set_label_text(self, text):
+        self.label_item.setText(text)
+
+    def set_label_visible(self, visible):
+        self.label_item.setVisible(visible)
 
     def set_radius(self, radius):
+        self._radius = radius
         self.setRect(-radius, -radius, 2 * radius, 2 * radius)
+        self._position_label()
+
+    def set_visibility(self, v):
+        self.visibility = v
+        self.update_color()
+        if self.canvas is not None:
+            self.canvas._redraw_skeleton()
+
+    def cycle_visibility(self):
+        # 2 (görünür) -> 1 (örtük) -> 0 (yok) -> 2
+        self.set_visibility({2: 1, 1: 0, 0: 2}[self.visibility])
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.ItemScenePositionHasChanged:
-            self.canvas.sync_keypoint(self.kp_index, self.scenePos().x(), self.scenePos().y())
-            self.canvas._redraw_skeleton()
+            if self.canvas is not None:
+                self.canvas._redraw_skeleton()
+        elif change == QGraphicsItem.ItemSelectedHasChanged:
+            self.update_color()
+            if self.canvas is not None and bool(value):
+                self.canvas._on_item_selected(self)
         return super().itemChange(change, value)
 
+    def mousePressEvent(self, event):
+        # Taşıma öncesi durumu kaydet (undo için)
+        if self.canvas is not None:
+            self.canvas.begin_interaction()
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        if self.canvas is not None:
+            self.canvas.end_interaction()
+
     def mouseDoubleClickEvent(self, event):
-        # Çift tık: görünürlük döngüsü 2 -> 1 -> 0 -> 2
-        self.visibility = {2: 1, 1: 0, 0: 2}[self.visibility]
-        self.canvas.sync_visibility(self.kp_index, self.visibility)
-        self.update_color()
-        self.canvas._redraw_skeleton()
+        # Çift tık: görünürlük döngüsü (undo'lu)
+        if self.canvas is not None:
+            self.canvas.push_undo()
+        self.cycle_visibility()
+        if self.canvas is not None:
+            self.canvas.mark_dirty()
         super().mouseDoubleClickEvent(event)
 
 
 class KeypointCanvas(QGraphicsView):
+    """
+    Keypoint gösterimi/düzenleme canvas'ı. Noktalar keypoint INDEX'ine göre
+    saklanır (point_items: {index: KeypointItem}); v=0 (yerleştirilmemiş) slotlar
+    boş kalır. Detect ile aynı olgunluk: seçme, taşıma, silme, görünürlük,
+    undo/redo, klavye kısayolları.
+    """
+
     def __init__(self, status_callback=None):
         super().__init__()
         self.scene = QGraphicsScene(self)
         self.setScene(self.scene)
         self.setRenderHint(QPainter.Antialiasing)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
+        self.setFocusPolicy(Qt.StrongFocus)
 
         self.pixmap_item = None
-        self.keypoints = []       # [(x, y, v), ...]
-        self.point_items = []
+        self.point_items = {}     # {index: KeypointItem}
         self.line_items = []
-        self.current_kp_index = 0
+        self.active_index = 0     # sıradaki/aktif keypoint index'i
         self.point_radius = 5
+        self.show_labels = False  # nokta üzerindeki index/isim etiketleri (L ile aç/kapa)
         self.status_callback = status_callback
+
+        # Widget'in bağladığı geri çağrılar (klavye kısayolları için)
+        self.on_prev = None
+        self.on_next = None
+        self.on_save = None
+        self.on_labels_toggled = None  # L kısayolu butonu senkronlasın
+
+        # Geri alma/ileri alma geçmişi ve değişiklik bayrağı
+        self._undo = []
+        self._redo = []
+        self._pending = None
+        self.dirty = False
 
         self._panning = False
         self._pan_start = None
 
+    # ---------- Temel ----------
+    def num_kpts(self):
+        return project_state.num_keypoints()
+
+    def has_points(self):
+        return len(self.point_items) > 0
+
     def load_image(self, image_path):
         self.scene.clear()
-        self.keypoints = []
-        self.point_items = []
+        self.point_items = {}
         self.line_items = []
-        self.current_kp_index = 0
+        self.active_index = 0
 
         pixmap = QPixmap(image_path)
         self.pixmap_item = QGraphicsPixmapItem(pixmap)
+        # Görsel en arkada kalsın: iskelet çizgileri (z=0) ve noktalar (z=1) üstte.
+        self.pixmap_item.setZValue(-10)
         self.scene.addItem(self.pixmap_item)
         self.setSceneRect(QRectF(pixmap.rect()))
         self.fitInView(self.pixmap_item, Qt.KeepAspectRatio)
+        self.reset_history()
         self._update_status()
         return pixmap.width(), pixmap.height()
 
@@ -100,6 +202,24 @@ class KeypointCanvas(QGraphicsView):
         factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
         self.scale(factor, factor)
 
+    def reset_zoom(self):
+        if self.pixmap_item is not None:
+            self.resetTransform()
+            self.fitInView(self.pixmap_item, Qt.KeepAspectRatio)
+
+    def set_labels_visible(self, visible):
+        self.show_labels = bool(visible)
+        for it in self.point_items.values():
+            it.set_label_visible(self.show_labels)
+        if callable(self.on_labels_toggled):
+            self.on_labels_toggled(self.show_labels)
+
+    def toggle_labels(self):
+        self.set_labels_visible(not self.show_labels)
+        self._status_msg("Etiketler açık (L)" if self.show_labels else "Etiketler kapalı (L)")
+        return self.show_labels
+
+    # ---------- Fare ----------
     def mousePressEvent(self, event):
         if event.button() == Qt.MiddleButton:
             self._panning = True
@@ -108,16 +228,14 @@ class KeypointCanvas(QGraphicsView):
             return
 
         if event.button() == Qt.LeftButton and self.pixmap_item is not None:
-            # Var olan bir noktanın üstüne mi tıkladık? (taşıma için)
             item_at = self.itemAt(event.pos())
             if isinstance(item_at, KeypointItem):
-                super().mousePressEvent(event)  # taşımayı Qt'ye bırak
+                super().mousePressEvent(event)  # seçme/taşımayı Qt'ye bırak
                 return
-            # Yeni nokta ekle (henüz 17 tamamlanmadıysa)
-            if self.current_kp_index < project_state.num_keypoints():
-                scene_pos = self.mapToScene(event.pos())
-                self._add_keypoint(scene_pos.x(), scene_pos.y())
-                return
+            # Boş alan: aktif keypoint'i buraya yerleştir
+            scene_pos = self.mapToScene(event.pos())
+            self.place_point(scene_pos.x(), scene_pos.y())
+            return
 
         super().mousePressEvent(event)
 
@@ -137,96 +255,282 @@ class KeypointCanvas(QGraphicsView):
             return
         super().mouseReleaseEvent(event)
 
-    def _add_keypoint(self, x, y):
-        self.keypoints.append((x, y, 2))
-        item = KeypointItem(x, y, self.point_radius, self.current_kp_index, self)
+    # ---------- Klavye ----------
+    def keyPressEvent(self, event):
+        key = event.key()
+        mods = event.modifiers()
+        ctrl = bool(mods & Qt.ControlModifier)
+        shift = bool(mods & Qt.ShiftModifier)
+
+        if ctrl and key == Qt.Key_Z and not shift:
+            self.undo(); return
+        if (ctrl and key == Qt.Key_Y) or (ctrl and shift and key == Qt.Key_Z):
+            self.redo(); return
+        if ctrl and key == Qt.Key_S:
+            if callable(self.on_save):
+                self.on_save()
+            return
+        if key in (Qt.Key_Delete, Qt.Key_X):
+            self.delete_selected(); return
+        if key == Qt.Key_V:
+            self.toggle_visibility_selected(); return
+        if key == Qt.Key_L:
+            self.toggle_labels(); return
+        if key == Qt.Key_R:
+            self.reset_zoom(); return
+        if key == Qt.Key_Left:
+            if callable(self.on_prev):
+                self.on_prev()
+            return
+        if key == Qt.Key_Right:
+            if callable(self.on_next):
+                self.on_next()
+            return
+        if Qt.Key_0 <= key <= Qt.Key_9:
+            self.set_active_index(key - Qt.Key_0)
+            return
+        super().keyPressEvent(event)
+
+    # ---------- Nokta yerleştirme / index yönetimi ----------
+    def _first_free_index(self):
+        for i in range(self.num_kpts()):
+            if i not in self.point_items:
+                return i
+        return None
+
+    def _advance_active(self):
+        free = self._first_free_index()
+        self.active_index = free if free is not None else self.num_kpts()
+
+    def set_active_index(self, i):
+        if 0 <= i < self.num_kpts():
+            self.active_index = i
+            self._update_status()
+
+    def _create_item(self, index, x, y, v):
+        item = KeypointItem(x, y, self.point_radius, index, self, v)
         self.scene.addItem(item)
-        self.point_items.append(item)
-        self.current_kp_index += 1
+        self.point_items[index] = item
+        return item
+
+    def place_point(self, x, y):
+        num = self.num_kpts()
+        if num <= 0:
+            self._status_msg("Önce bir keypoint şablonu / data.yaml yükleyin.")
+            return
+        idx = self.active_index
+        if idx >= num or idx in self.point_items:
+            idx = self._first_free_index()
+        if idx is None:
+            self._status_msg("Tüm noktalar yerleştirildi. Taşımak için sürükleyin.")
+            return
+        self.push_undo()
+        self._create_item(idx, x, y, 2)
+        self.mark_dirty()
+        self._advance_active()
         self._redraw_skeleton()
         self._update_status()
 
     def sync_keypoint(self, index, x, y):
-        if index < len(self.keypoints):
-            _, _, v = self.keypoints[index]
-            self.keypoints[index] = (x, y, v)
+        # Geriye dönük uyumluluk için korunur (artık item'lar kaynak durumdur)
+        pass
 
     def sync_visibility(self, index, v):
-        if index < len(self.keypoints):
-            x, y, _ = self.keypoints[index]
-            self.keypoints[index] = (x, y, v)
+        if index in self.point_items:
+            self.point_items[index].set_visibility(v)
 
+    # ---------- Seçim / silme / görünürlük ----------
+    def selected_items(self):
+        return [it for it in self.scene.selectedItems() if isinstance(it, KeypointItem)]
+
+    def delete_selected(self):
+        sel = self.selected_items()
+        if not sel:
+            return False
+        self.push_undo()
+        for it in sel:
+            self.point_items.pop(it.kp_index, None)
+            self.scene.removeItem(it)
+        self.mark_dirty()
+        self._advance_active()
+        self._redraw_skeleton()
+        self._update_status()
+        self._status_msg(f"{len(sel)} nokta silindi.")
+        return True
+
+    def toggle_visibility_selected(self):
+        sel = self.selected_items()
+        if not sel:
+            self._status_msg("Görünürlük için önce bir nokta seçin (sol tık).")
+            return
+        self.push_undo()
+        for it in sel:
+            it.cycle_visibility()
+        self.mark_dirty()
+
+    def _on_item_selected(self, item):
+        # Bir noktaya tıklanınca o keypoint aktif index olsun (sağ liste vurgulanır)
+        self.active_index = item.kp_index
+        self._update_status()
+
+    # ---------- İskelet ----------
     def _redraw_skeleton(self):
         for line in self.line_items:
             self.scene.removeItem(line)
         self.line_items = []
+        total = self.num_kpts()
         for (a, b) in project_state.skeleton:
-            if a < len(self.keypoints) and b < len(self.keypoints):
-                xa, ya, va = self.keypoints[a]
-                xb, yb, vb = self.keypoints[b]
-                if va > 0 and vb > 0:
-                    line = QGraphicsLineItem(xa, ya, xb, yb)
-                    line.setPen(QPen(QColor(0, 200, 255), 2))
-                    line.setZValue(-1)
-                    self.scene.addItem(line)
-                    self.line_items.append(line)
+            ia, ib = self.point_items.get(a), self.point_items.get(b)
+            if ia is not None and ib is not None and ia.visibility > 0 and ib.visibility > 0:
+                pa, pb = ia.scenePos(), ib.scenePos()
+                line = QGraphicsLineItem(pa.x(), pa.y(), pb.x(), pb.y())
+                r, g, bl = skeleton_edge_color(a, b, total)
+                line.setPen(QPen(QColor(r, g, bl), 2))
+                line.setZValue(0)  # görselin (z=-10) üstünde, noktaların (z=1) altında
+                self.scene.addItem(line)
+                self.line_items.append(line)
 
     def set_point_radius(self, radius):
         self.point_radius = radius
-        for item in self.point_items:
+        for item in self.point_items.values():
             item.set_radius(radius)
 
-    def undo_last_point(self):
-        if self.keypoints:
-            self.keypoints.pop()
-            item = self.point_items.pop()
-            self.scene.removeItem(item)
-            self.current_kp_index -= 1
-            self._redraw_skeleton()
-            self._update_status()
+    # ---------- Undo / Redo ----------
+    def snapshot(self):
+        return sorted(
+            (idx, round(it.scenePos().x(), 3), round(it.scenePos().y(), 3), it.visibility)
+            for idx, it in self.point_items.items()
+        )
 
-    def clear_points(self):
-        for item in self.point_items:
-            self.scene.removeItem(item)
-        for line in self.line_items:
-            self.scene.removeItem(line)
-        self.keypoints = []
-        self.point_items = []
-        self.line_items = []
-        self.current_kp_index = 0
-        self._update_status()
-
-    def load_keypoints(self, keypoints):
-        """Kayıtlı keypoint'leri geri yükler."""
-        self.clear_points()
-        for (x, y, v) in keypoints:
-            if v > 0:
-                self.keypoints.append((x, y, v))
-                item = KeypointItem(x, y, self.point_radius, self.current_kp_index, self)
-                item.visibility = v
-                item.update_color()
-                self.scene.addItem(item)
-                self.point_items.append(item)
-                self.current_kp_index += 1
+    def restore(self, snap):
+        for it in list(self.point_items.values()):
+            self.scene.removeItem(it)
+        self.point_items = {}
+        for (idx, x, y, v) in snap:
+            self._create_item(idx, x, y, v)
+        self._advance_active()
         self._redraw_skeleton()
         self._update_status()
 
-    def _update_status(self):
+    def push_undo(self):
+        self._undo.append(self.snapshot())
+        self._redo.clear()
+
+    def begin_interaction(self):
+        self._pending = self.snapshot()
+
+    def end_interaction(self):
+        if self._pending is None:
+            return
+        if self._pending != self.snapshot():
+            self._undo.append(self._pending)
+            self._redo.clear()
+            self.mark_dirty()
+        self._pending = None
+
+    def undo(self):
+        if not self._undo:
+            self._status_msg("Geri alınacak işlem yok.")
+            return
+        self._redo.append(self.snapshot())
+        self.restore(self._undo.pop())
+        self.mark_dirty()
+        self._status_msg("Geri alındı (Ctrl+Z).")
+
+    def redo(self):
+        if not self._redo:
+            self._status_msg("İleri alınacak işlem yok.")
+            return
+        self._undo.append(self.snapshot())
+        self.restore(self._redo.pop())
+        self.mark_dirty()
+        self._status_msg("İleri alındı.")
+
+    def reset_history(self):
+        self._undo = []
+        self._redo = []
+        self._pending = None
+        self.dirty = False
+
+    def mark_dirty(self):
+        self.dirty = True
+
+    # ---------- Buton eylemleri ----------
+    def undo_last_point(self):
+        """'Geri Al' butonu — genel undo ile aynı."""
+        self.undo()
+
+    def clear_points(self):
+        if self.point_items:
+            self.push_undo()
+        for item in list(self.point_items.values()):
+            self.scene.removeItem(item)
+        for line in self.line_items:
+            self.scene.removeItem(line)
+        self.point_items = {}
+        self.line_items = []
+        self.active_index = 0
+        self.mark_dirty()
+        self._update_status()
+
+    def load_keypoints(self, keypoints):
+        """
+        Kayıtlı keypoint'leri INDEX'i koruyarak geri yükler.
+        v>0 ya da (0,0) olmayan koordinatlı noktalar yerleştirilmiş kabul edilir;
+        böylece iskelet index eşlemesi bozulmaz.
+        """
+        for item in list(self.point_items.values()):
+            self.scene.removeItem(item)
+        for line in self.line_items:
+            self.scene.removeItem(line)
+        self.point_items = {}
+        self.line_items = []
+
+        for i, (x, y, v) in enumerate(keypoints):
+            if i >= self.num_kpts():
+                break
+            if v > 0 or x != 0 or y != 0:
+                self._create_item(i, x, y, v)
+        self._advance_active()
+        self._redraw_skeleton()
+        self.reset_history()
+        self._update_status()
+
+    # ---------- Durum ----------
+    def _status_msg(self, text):
         if self.status_callback:
-            n = project_state.num_keypoints()
-            if self.current_kp_index < n:
-                next_name = project_state.keypoint_names[self.current_kp_index]
-                self.status_callback(f"Sıradaki: {self.current_kp_index}: {next_name}", self.current_kp_index)
-            else:
-                self.status_callback(f"Tüm noktalar yerleştirildi ({n}/{n})", n)
+            self.status_callback(text, self.active_index if self.active_index < self.num_kpts() else max(self.num_kpts() - 1, 0))
+
+    def _update_status(self):
+        if not self.status_callback:
+            return
+        n = self.num_kpts()
+        placed = len(self.point_items)
+        ai = self.active_index
+        if ai < n and n > 0:
+            name = project_state.keypoint_names[ai] if ai < len(project_state.keypoint_names) else str(ai)
+            self.status_callback(f"Aktif: {ai}: {name}  |  Yerleşen: {placed}/{n}", ai)
+        else:
+            self.status_callback(f"Tüm noktalar yerleşti ({placed}/{n})", max(n - 1, 0))
+
     def get_keypoints(self):
-        return self.keypoints
+        """Sıralı (index'e göre) keypoint listesi; boş slotlar (0,0,0)."""
+        result = []
+        for i in range(self.num_kpts()):
+            it = self.point_items.get(i)
+            if it is not None:
+                p = it.scenePos()
+                result.append((p.x(), p.y(), it.visibility))
+            else:
+                result.append((0, 0, 0))
+        return result
 
 
 class KeypointLabelingWidget(QWidget):
     def __init__(self):
         super().__init__()
         self.image_folder = None
+        self.label_folder = None      # kaynak etiket klasörü (images -> labels)
         self.output_folder = None
         self.image_files = []
         self.current_index = -1
@@ -280,6 +584,11 @@ class KeypointLabelingWidget(QWidget):
         center_layout.addLayout(size_layout)
 
         self.canvas = KeypointCanvas(status_callback=self._set_status)
+        # Klavye kısayollarının canvas'tan gezinme/kaydı tetiklemesi için geri çağrılar
+        self.canvas.on_prev = self.prev_image
+        self.canvas.on_next = self.next_image
+        self.canvas.on_save = self.save_current
+        self.canvas.on_labels_toggled = self._on_labels_toggled
         center_layout.addWidget(self.canvas)
 
         self.status_label = QLabel("Bir klasör açarak başlayın.")
@@ -303,13 +612,31 @@ class KeypointLabelingWidget(QWidget):
         btn_edit_template.clicked.connect(self.edit_keypoint_template)
         right_panel.addWidget(btn_edit_template)
 
-        right_panel.addWidget(QLabel("Keypoint Sırası"))
+        right_panel.addWidget(QLabel("Keypoint Sırası (tıkla = aktif nokta)"))
         self.kp_list = QListWidget()
+        self.kp_list.itemClicked.connect(self._on_kp_list_clicked)
         right_panel.addWidget(self.kp_list)
 
-        info = QLabel("Çift tık: görünürlük\n(kırmızı→turuncu→gri)\nSürükle: taşı")
+        self.btn_delete_point = QPushButton("Seçili Noktayı Sil (Del)")
+        self.btn_delete_point.clicked.connect(lambda: self.canvas.delete_selected())
+        right_panel.addWidget(self.btn_delete_point)
+
+        self.btn_toggle_labels = QPushButton("Etiketleri Göster (L)")
+        self.btn_toggle_labels.setCheckable(True)
+        self.btn_toggle_labels.clicked.connect(self.toggle_labels)
+        right_panel.addWidget(self.btn_toggle_labels)
+
+        info = QLabel(
+            "Sol tık: nokta ekle/seç\nSürükle: taşı\n"
+            "Çift tık / V: görünürlük\nDelete/X: sil\nCtrl+Z: geri al"
+        )
         info.setStyleSheet("font-size: 11px;")
         right_panel.addWidget(info)
+
+        btn_help = QPushButton("Yardım (F1)")
+        btn_help.clicked.connect(self.show_help)
+        right_panel.addWidget(btn_help)
+
         right_widget = QWidget()
         right_widget.setLayout(right_panel)
         right_widget.setMaximumWidth(200)
@@ -319,20 +646,48 @@ class KeypointLabelingWidget(QWidget):
         main_layout.addWidget(right_widget)
         self.setLayout(main_layout)
 
+        # Klavye kısayolları — Detect ile tutarlı gezinme/kayıt.
+        # (Ok tuşları, 0-9, Delete/X, V, R, Ctrl+Z/Y canvas.keyPressEvent'te; canvas
+        #  odaktayken çalışır. A/D/S/Ctrl+S pencere genelinde çalışsın.)
+        QShortcut(QKeySequence("A"), self, self.prev_image)
+        QShortcut(QKeySequence("D"), self, self.next_image)
+        QShortcut(QKeySequence("S"), self, self.save_current)
+        QShortcut(QKeySequence("Ctrl+S"), self, self.save_current)
+
     def on_size_changed(self, value):
         self.size_value_label.setText(str(value))
         self.canvas.set_point_radius(value)
 
     def _set_status(self, text, kp_index):
         self.status_label.setText(text)
-        if kp_index < self.kp_list.count():
+        if 0 <= kp_index < self.kp_list.count():
+            self.kp_list.blockSignals(True)
             self.kp_list.setCurrentRow(kp_index)
+            self.kp_list.blockSignals(False)
+
+    def _on_kp_list_clicked(self, item):
+        """Sağ listeden bir keypoint'e tıklanınca onu aktif index yapar."""
+        row = self.kp_list.row(item)
+        if row >= 0:
+            self.canvas.set_active_index(row)
+
+    def toggle_labels(self):
+        """'Etiketleri Göster' butonu — nokta etiketlerini aç/kapat."""
+        self.canvas.toggle_labels()
+
+    def _on_labels_toggled(self, state):
+        """Etiket görünürlüğü değişince (buton ya da L tuşu) butonu senkronla."""
+        self.btn_toggle_labels.setChecked(state)
+        self.btn_toggle_labels.setText("Etiketleri Gizle (L)" if state else "Etiketleri Göster (L)")
 
     def open_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Resim Klasörünü Seç")
         if not folder:
             return
         self.image_folder = folder
+        # Kaynak etiketler: standart YOLO kuralıyla türet (images/train -> labels/train),
+        # yoksa görsellerin yanında ara. Detect Labeling ile aynı çözümleme.
+        self.label_folder = derive_labels_dir(folder) or folder
 
         # Çıktı, seçilen klasörün İÇİNDE oluşturulur (üst dizinde değil)
         self.output_folder = default_output_dir(folder, "keypoint_çıktı")
@@ -359,13 +714,30 @@ class KeypointLabelingWidget(QWidget):
         image_path = os.path.join(self.image_folder, self.image_files[row])
         img_w, img_h = self.canvas.load_image(image_path)
 
-        # Kayıtlı etiket varsa geri yükle
+        # Önce çıktı klasöründe kaydedilmiş etiket, yoksa KAYNAK etiket (labels/train)
         base_name = os.path.splitext(self.image_files[row])[0]
-        out_label = os.path.join(self.output_folder, "labels", base_name + ".txt")
-        if os.path.exists(out_label):
-            persons = load_pose_label(out_label, img_w, img_h)
+        out_label = os.path.join(self.output_folder, "labels", base_name + ".txt") if self.output_folder else None
+        src_label = os.path.join(self.label_folder, base_name + ".txt") if self.label_folder else None
+
+        label_to_load = None
+        if out_label and os.path.exists(out_label):
+            label_to_load = out_label
+        elif src_label and os.path.exists(src_label):
+            label_to_load = src_label
+
+        n_loaded = 0
+        if label_to_load:
+            persons = load_pose_label(label_to_load, img_w, img_h)
             if persons:
                 self.canvas.load_keypoints(persons[0]['keypoints'])
+                n_loaded = sum(1 for _, _, v in persons[0]['keypoints'] if v > 0)
+
+        status = f"{row + 1}/{len(self.image_files)} — {self.image_files[row]}"
+        if label_to_load:
+            status += f" — {n_loaded} nokta yüklendi"
+        else:
+            status += " — etiket yok (yeni)"
+        self.status_label.setText(status)
 
     def save_current(self):
         if self.current_index == -1 or self.canvas.pixmap_item is None:
@@ -373,10 +745,10 @@ class KeypointLabelingWidget(QWidget):
         if self.output_folder is None:
             return
 
-        keypoints = list(self.canvas.get_keypoints())
-        if not keypoints:
-            return  # hiç nokta yoksa kaydetme
+        if not self.canvas.has_points():
+            return  # hiç yerleştirilmiş nokta yoksa kaydetme
 
+        keypoints = list(self.canvas.get_keypoints())
         while len(keypoints) < project_state.num_keypoints():
             keypoints.append((0, 0, 0))
 
@@ -414,6 +786,7 @@ class KeypointLabelingWidget(QWidget):
         item = self.file_list.item(self.current_index)
         if item:
             item.setForeground(QBrush(QColor(0, 170, 0)))
+        self.canvas.dirty = False
         self.status_label.setText(f"Kaydedildi: {base_name}")
 
     def next_image(self):
@@ -423,6 +796,55 @@ class KeypointLabelingWidget(QWidget):
     def prev_image(self):
         if self.current_index > 0:
             self.file_list.setCurrentRow(self.current_index - 1)
+
+    def show_help(self):
+        """F1 — Keypoint Labeling kısayol ve fare rehberi."""
+        show_help(
+            self,
+            "Keypoint Labeling (Anahtar Nokta Etiketleme) — Yardım",
+            "İnsan iskeleti / poz noktalarını (keypoint) yerleştirme ve düzenleme "
+            "modülü. Noktaları tıklayarak ekle, seç, sürükle, görünürlüğünü değiştir. "
+            "Kaynak etiketler (labels/) otomatik yüklenir; düzeltmeler keypoint_çıktı "
+            "klasörüne kaydedilir. (Ok/0-9/Delete/V/R/Ctrl+Z için canvas odakta olmalı.)",
+            [
+                ("Dosya Yönetimi", [
+                    ("Resim Klasörü Aç", "Görsel klasörünü seçer (labels/ otomatik bulunur)"),
+                    ("data.yaml Yükle", "Keypoint şablonunu (nokta sayısı) yükler"),
+                    ("Şablon Düzenle", "Nokta ve iskelet bağlantılarını özelleştirir"),
+                ]),
+                ("Görsel Gezinme", [
+                    ("A / Sol Ok", "Önceki görsel"),
+                    ("D / Sağ Ok", "Sonraki görsel"),
+                    ("Fare Tekerleği", "Yakınlaştır / uzaklaştır (zoom)"),
+                    ("R", "Zoom'u sıfırla (görsele sığdır)"),
+                    ("Orta Tuş (basılı)", "Görseli kaydır (pan)"),
+                ]),
+                ("Etiketleme", [
+                    ("Sol tık (boş alan)", "Aktif keypoint'i buraya yerleştirir"),
+                    ("Sol tık (nokta)", "Noktayı seçer (yeşil halka)"),
+                    ("Sürükle", "Seçili/var olan noktayı taşır"),
+                    ("0-9", "Aktif keypoint index'ini seçer"),
+                    ("Sağ listeye tık", "Aktif keypoint'i seçer"),
+                    ("V / Çift tık", "Görünürlük: görünür→örtük(yarı saydam)→yok(gri)"),
+                    ("L", "Nokta index/isim etiketlerini aç/kapat"),
+                    ("Delete / X", "Seçili noktayı sil"),
+                ]),
+                ("Renkler", [
+                    ("Her nokta", "Kendi sabit renginde (elde parmak bazlı)"),
+                    ("İskelet çizgileri", "Parmak grubuna göre renkli"),
+                    ("Seçili nokta", "Kalın beyaz halka (rengini korur)"),
+                ]),
+                ("Geri Al / Yinele", [
+                    ("Ctrl+Z", "Son işlemi geri al"),
+                    ("Ctrl+Y / Ctrl+Shift+Z", "Yinele (ileri al)"),
+                    ("Geri Al / Temizle", "Buton: son işlemi geri al / tümünü temizle"),
+                ]),
+                ("Kayıt", [
+                    ("S / Ctrl+S", "Mevcut görseli kaydet"),
+                    ("A/D ile geçiş", "Görsel değişince otomatik kaydedilir"),
+                ]),
+            ]
+        )
 
     def _populate_kp_list(self):
         self.kp_list.clear()

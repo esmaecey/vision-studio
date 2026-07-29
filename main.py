@@ -5,10 +5,13 @@ Sol navigation panel + sağda modül içeriği (QStackedWidget).
 import sys
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QHBoxLayout, QVBoxLayout,
-    QListWidget, QListWidgetItem, QStackedWidget, QLabel, QGroupBox
+    QListWidget, QListWidgetItem, QStackedWidget, QLabel, QGroupBox, QShortcut
 )
+from PyQt5.QtGui import QKeySequence
 from PyQt5.QtCore import Qt
 
+from config.project_state import project_state
+from config.app_settings import load_settings, save_setting
 from gui.detect_labeling.ui import DetectLabelingWidget
 from gui.keypoint_labeling.ui import KeypointLabelingWidget
 from gui.augmentation.ui import AugmentationWidget
@@ -27,8 +30,19 @@ class MainWindow(QWidget):
         self.setWindowTitle("Vision Studio")
         self.setGeometry(60, 60, 1400, 850)
         self.current_palette = LIGHT
+
+        # Kalıcı ayarları geri yükle: aktif proje (data.yaml), model, çıktı klasörü.
+        # Sayfalar oluşturulmadan ÖNCE yüklenir ki sınıf listeleri dolu gelsin.
+        project_state.restore_from_settings()
+
         self._build_ui()
-        self.apply_theme("light")
+
+        # Kayıtlı temayı uygula (yoksa açık tema)
+        saved_theme = load_settings().get("theme", "light")
+        self.apply_theme(saved_theme)
+
+        # F1: aktif modülün yardım penceresini aç
+        QShortcut(QKeySequence("F1"), self, self._show_current_help)
 
     def _build_ui(self):
         main_layout = QHBoxLayout()
@@ -49,13 +63,13 @@ class MainWindow(QWidget):
 
         menu_items = [
             "Home",
-            "Detect Labeling",
-            "Keypoint Labeling",
-            "Data Augmentation",
-            "Dataset Split",
-            "Veri Doğrulama",
-            "Training",
-            "Testing",
+            "Detect Labeling (Nesne Etiketleme)",
+            "Keypoint Labeling (Anahtar Nokta Etiketleme)",
+            "Data Augmentation (Veri Artırma)",
+            "Dataset Split (Veri Bölme)",
+            "Data Validation (Veri Doğrulama)",
+            "Training (Eğitim)",
+            "Testing (Test)",
             "Settings",
             "About",
         ]
@@ -126,12 +140,28 @@ class MainWindow(QWidget):
     def on_nav_changed(self, index):
         self.stack.setCurrentIndex(index)
 
+    def _show_current_help(self):
+        """F1: o an açık olan modülün yardım penceresini açar."""
+        current = self.stack.currentWidget()
+        if hasattr(current, "show_help") and callable(current.show_help):
+            current.show_help()
+        else:
+            from gui.common.help import show_help
+            show_help(
+                self, "Vision Studio — Yardım",
+                "Bu modül için özel bir kısayol rehberi tanımlı değil. "
+                "Etiketleme modüllerinde (Detect / Keypoint) F1 tüm kısayolları gösterir.",
+                []
+            )
+
     def apply_theme(self, theme):
         palette = DARK if theme == "dark" else LIGHT
         self.current_palette = palette
         self.setStyleSheet(build_stylesheet(palette))
         self.nav_list.setStyleSheet(sidebar_stylesheet(palette))
         self.logo.setStyleSheet(logo_stylesheet(palette))
+        # Temayı kalıcı yap
+        save_setting("theme", "dark" if theme == "dark" else "light")
 
 
 if __name__ == "__main__":

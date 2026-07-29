@@ -5,6 +5,8 @@ Aktif data.yaml, sınıf listesi ve keypoint şablonunu tüm modüller için tut
 import os
 import yaml
 
+from config.app_settings import save_setting
+
 
 # ---------- Varsayılan COCO 17 keypoint şablonu ----------
 DEFAULT_KEYPOINT_NAMES = [
@@ -81,6 +83,9 @@ class ProjectState:
         self.data_yaml_path = path
         self.dataset_root = os.path.dirname(path)
 
+        # Aktif projeyi kalıcı ayarlara yaz (uygulama açılışında geri yüklenir)
+        save_setting("data_yaml_path", path)
+
         # Keypoint şablonu (opsiyonel — data.yaml'da varsa kullan)
         kp_names = data.get("kpt_names")
         if isinstance(kp_names, list) and kp_names:
@@ -140,7 +145,35 @@ class ProjectState:
     def set_output_dir(self, path):
         """Eğitim çıktıları için sabit klasör belirler (boş verilirse varsayılana döner)."""
         self.output_dir = path or None
+        save_setting("output_dir", self.output_dir)
         self._notify()
+
+    def set_default_model_path(self, path):
+        """Test/eğitim için varsayılan model yolunu belirler ve kalıcı yapar."""
+        self.default_model_path = path or None
+        save_setting("default_model_path", self.default_model_path)
+        self._notify()
+
+    def restore_from_settings(self):
+        """
+        Uygulama açılışında kalıcı ayarları geri yükler:
+        varsayılan model yolu, çıktı klasörü ve aktif proje (data.yaml).
+        Tema arayüz tarafında (MainWindow) uygulanır.
+        """
+        from config.app_settings import load_settings
+        s = load_settings()
+        model = s.get("default_model_path")
+        if model:
+            self.default_model_path = model
+        out = s.get("output_dir")
+        if out:
+            self.output_dir = out
+        dy = s.get("data_yaml_path")
+        if dy and os.path.exists(dy):
+            try:
+                self.load_data_yaml(dy)
+            except Exception as e:
+                print(f"Aktif proje geri yüklenemedi: {e}")
 
     def training_base_dir(self, fallback_data_yaml=None):
         """

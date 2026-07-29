@@ -9,6 +9,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 
 from config.project_state import project_state
+from config.app_settings import load_settings
 
 
 class SettingsWidget(QWidget):
@@ -66,6 +67,9 @@ class SettingsWidget(QWidget):
         theme_layout.addWidget(QLabel("Tema:"))
         self.theme_combo = QComboBox()
         self.theme_combo.addItems(["Açık (Light)", "Koyu (Dark)"])
+        # Kayıtlı temayı yansıt (sinyal bağlanmadan önce ayarla ki tekrar uygulanmasın)
+        if load_settings().get("theme") == "dark":
+            self.theme_combo.setCurrentIndex(1)
         self.theme_combo.currentIndexChanged.connect(self.on_theme_changed)
         theme_layout.addWidget(self.theme_combo)
         theme_layout.addStretch()
@@ -137,7 +141,8 @@ class SettingsWidget(QWidget):
         path, _ = QFileDialog.getOpenFileName(self, "Varsayılan Model", "", "PyTorch (*.pt)")
         if path:
             self.model_line.setText(path)
-            project_state.default_model_path = path
+            # Kalıcı yap (uygulama açılışında geri yüklenir)
+            project_state.set_default_model_path(path)
 
     def select_output_dir(self):
         path = QFileDialog.getExistingDirectory(self, "Çıktı Klasörü Seç", "")
@@ -161,6 +166,12 @@ class SettingsWidget(QWidget):
         if project_state.data_yaml_path:
             self.yaml_line.setText(project_state.data_yaml_path)
         self.status_label.setText(project_state.summary())
+
+        # Kalıcı ayarlardan geri yüklenen model/çıktı yollarını göster
+        if getattr(project_state, "default_model_path", None):
+            self.model_line.setText(project_state.default_model_path)
+        if getattr(project_state, "output_dir", None):
+            self.output_line.setText(project_state.output_dir)
 
         self.class_list.clear()
         for i, name in enumerate(project_state.class_names):

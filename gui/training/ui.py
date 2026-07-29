@@ -7,11 +7,12 @@ from PyQt5.QtWidgets import (
     QFileDialog, QSpinBox, QDoubleSpinBox, QComboBox, QCheckBox,
     QProgressBar, QTextEdit, QGroupBox, QGridLayout, QMessageBox
 )
-from PyQt5.QtGui import QPixmap, QDesktopServices
+from PyQt5.QtGui import QPixmap, QDesktopServices, QTextCursor
 from PyQt5.QtCore import Qt, QUrl
 
 from .worker import TrainingWorker, prepare_training_yaml
 from config.project_state import project_state
+from gui.common.help import show_help
 
 
 class TrainingWidget(QWidget):
@@ -22,6 +23,7 @@ class TrainingWidget(QWidget):
         self.mode = "detect"  # detect veya pose
         self._temp_data_yaml = None  # eğitim için üretilen geçici data.yaml
         self._last_exp_name = None   # kullanıcının girdiği deney adı (hata sonrası korunur)
+        self.resume_path = None      # seçilen last.pt (resume) yolu
         self._build_ui()
         project_state.add_listener(self._on_project_changed)
         self._on_project_changed()
@@ -115,8 +117,36 @@ class TrainingWidget(QWidget):
         self.cache_check = QCheckBox("Cache (RAM)")
         grid.addWidget(self.cache_check, 4, 2)
 
+        grid.addWidget(QLabel("Checkpoint (epoch):"), 5, 0)
+        self.save_period_spin = QSpinBox()
+        self.save_period_spin.setRange(-1, 1000)
+        self.save_period_spin.setValue(-1)
+        self.save_period_spin.setToolTip(
+            "Kaç epoch'ta bir ara kayıt (checkpoint) alınsın. -1 = kapalı "
+            "(yalnızca last.pt ve best.pt). Örn. 10 = her 10 epoch'ta bir kopya."
+        )
+        grid.addWidget(self.save_period_spin, 5, 1)
+
         param_group.setLayout(grid)
         layout.addWidget(param_group)
+
+        # --- Kaldığı yerden devam (resume) ---
+        resume_group = QGroupBox("Kaldığı Yerden Devam Et (Resume)")
+        resume_layout = QHBoxLayout()
+        self.resume_line = QLineEdit()
+        self.resume_line.setReadOnly(True)
+        self.resume_line.setPlaceholderText(
+            "Önceki eğitimin last.pt dosyasını seçin (opsiyonel — kesinti sonrası devam)"
+        )
+        btn_resume = QPushButton("last.pt Seç")
+        btn_resume.clicked.connect(self.select_resume)
+        btn_resume_clear = QPushButton("Temizle")
+        btn_resume_clear.clicked.connect(self.clear_resume)
+        resume_layout.addWidget(self.resume_line)
+        resume_layout.addWidget(btn_resume)
+        resume_layout.addWidget(btn_resume_clear)
+        resume_group.setLayout(resume_layout)
+        layout.addWidget(resume_group)
 
         # --- Deney adı ---
         name_layout = QHBoxLayout()
@@ -154,8 +184,11 @@ class TrainingWidget(QWidget):
         bottom_layout = QHBoxLayout()
         self.log_area = QTextEdit()
         self.log_area.setReadOnly(True)
-        # Metrik satırlarının hizalı görünmesi için sabit genişlikli font
+        # Metrik satırlarının hizalı görünmesi için sabit genişlikli font +
+        # zengin metin kapalı (aksi halde çok boşluk tek boşluğa iner, girinti kaybolur)
         self.log_area.setFontFamily("Consolas")
+        self.log_area.setAcceptRichText(False)
+        self.log_area.setLineWrapMode(QTextEdit.NoWrap)
         bottom_layout.addWidget(self.log_area, stretch=1)
 
         self.result_image = QLabel("Eğitim sonucu grafikleri burada gösterilecek")
@@ -218,9 +251,71 @@ class TrainingWidget(QWidget):
         if self.last_result_dir and os.path.isdir(self.last_result_dir):
             QDesktopServices.openUrl(QUrl.fromLocalFile(self.last_result_dir))
 
+    def select_resume(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Devam edilecek last.pt Seç", "", "PyTorch (*.pt)"
+        )
+        if path:
+            self.resume_path = path
+            self.resume_line.setText(path)
+            self._append_log(
+                "Resume modu aktif: eğitim seçilen last.pt'den devam edecek. "
+                "(Diğer parametreler checkpoint'ten okunur.)"
+            )
+
+    def clear_resume(self):
+        self.resume_path = None
+        self.resume_line.clear()
+        self._append_log("Resume iptal edildi: normal (sıfırdan) eğitim.")
+
+    def show_help(self):
+        """F1 — modül bilgisi."""
+        show_help(
+            self,
+            "Training (Eğitim) — Yardım",
+            "YOLOv8 ile Detect ve Pose (Keypoint) modelleri eğitir. Parametreleri "
+            "ayarlayın, eğitimi başlatın; bitince sonuç grafiği ve çıktı klasörü "
+            "(best.pt, analiz.txt) hazır olur.",
+            [
+                ("Kullanım", [
+                    ("Detect / Pose", "Eğitim türünü seçer"),
+                    ("data.yaml Seç", "Veri setini seçer (Settings'ten de gelir)"),
+                    ("Parametreler", "Model, epoch, batch, imgsz, lr vb."),
+                    ("Eğitimi Başlat", "Eğitimi arka planda başlatır"),
+                ]),
+                ("Kesinti / Devam", [
+                    ("Checkpoint (epoch)", "Kaç epoch'ta bir ara kayıt (save_period)"),
+                    ("last.pt Seç", "Kesinti sonrası kaldığı yerden devam (resume)"),
+                ]),
+                ("Sonuç", [
+                    ("analiz.txt", "Model, süre, genel/sınıf bazlı mAP özeti"),
+                    ("Çıktı Klasörünü Aç", "Sonuçların bulunduğu klasörü açar"),
+                ]),
+            ]
+        )
+
     def start_training(self):
+        # --- Resume: last.pt seçildiyse kaldığı yerden devam et ---
+        if self.resume_path:
+            if not os.path.exists(self.resume_path):
+                self._append_log("HATA: Seçilen last.pt bulunamadı.")
+                return
+            config = {
+                "resume": True,
+                "resume_model": self.resume_path,
+                "task": self.mode,
+                "save_period": self.save_period_spin.value(),
+            }
+            self.btn_open_dir.setEnabled(False)
+            self.btn_start.setEnabled(False)
+            self.progress.setValue(0)
+            self.log_area.clear()
+            self._append_log(f"[RESUME] Kaldığı yerden devam ediliyor: {self.resume_path}")
+            self._start_worker(config)
+            return
+
         if not self.data_yaml:
-            self.log_area.append("HATA: Önce data.yaml seçin.")
+            self._append_log("HATA: Önce data.yaml seçin.")
             return
 
         project_dir = self._compute_project_dir()
@@ -267,6 +362,7 @@ class TrainingWidget(QWidget):
         config = {
             "model": self.model_combo.currentText(),
             "data": prepared_yaml,
+            "data_original": self.data_yaml,   # rapor için orijinal data.yaml yolu
             "epochs": self.epoch_spin.value(),
             "imgsz": self.imgsz_spin.value(),
             "batch": self.batch_spin.value(),
@@ -280,20 +376,32 @@ class TrainingWidget(QWidget):
             "name": exp_name,
             "task": self.mode,
             "exist_ok": exist_ok,     # True: üzerine yaz, False: otomatik yeni klasör
+            "save_period": self.save_period_spin.value(),
         }
 
         self.btn_open_dir.setEnabled(False)
         self.btn_start.setEnabled(False)
         self.progress.setValue(0)
         self.log_area.clear()
-        self.log_area.append(f"[{self.mode.upper()}] Eğitim hazırlanıyor...")
+        self._append_log(f"[{self.mode.upper()}] Eğitim hazırlanıyor...")
+        self._start_worker(config)
 
+    def _start_worker(self, config):
+        """Ortak worker başlatma — normal ve resume eğitimi için."""
         self.worker = TrainingWorker(config)
         self.worker.progress.connect(self.progress.setValue)
-        self.worker.epoch_info.connect(self.log_area.append)
-        self.worker.log.connect(self.log_area.append)
+        self.worker.epoch_info.connect(self._append_log)
+        self.worker.log.connect(self._append_log)
         self.worker.finished_signal.connect(self.on_finished)
         self.worker.start()
+
+    def _append_log(self, text):
+        """Boşlukları/girintileri koruyarak log alanına yazar (metrik hizalaması için)."""
+        cursor = self.log_area.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        self.log_area.setTextCursor(cursor)
+        self.log_area.insertPlainText(text + "\n")
+        self.log_area.ensureCursorVisible()
 
     def on_finished(self, result_dir):
         self.btn_start.setEnabled(True)
