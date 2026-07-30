@@ -55,6 +55,15 @@ user_settings.json
 /sonuc.jpg
 /test.jpg
 /test_bend.jpg
+/format_duzelt.py
+/helmet_vest_sil.py
+/kirp_yapistir.py
+/kirp_yapistir_ekle.py
+/noboots_cikar.py
+/noboots_ekle.py
+/oksuz_temizle.py
+/say_tekbasina.py
+/sinif_analizi.py
 
 # --- Editör / IDE ---
 .vscode/
